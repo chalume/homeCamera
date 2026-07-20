@@ -55,6 +55,57 @@ def motion_score(
     return (changed / total if total else 0.0), mean_shift
 
 
+def block_motion_score(
+    frame: bytes,
+    background: bytearray,
+    frame_size: tuple[int, int],
+    block_grid: tuple[int, int],
+    block_delta: float,
+    normalize_luminance: bool,
+) -> tuple[float, float, int, int]:
+    width, height = frame_size
+    blocks_x, blocks_y = block_grid
+    block_width = max(1, width // blocks_x)
+    block_height = max(1, height // blocks_y)
+    active_blocks = 0
+    total_blocks = 0
+    mean_shift = 0.0
+
+    if normalize_luminance:
+        shift_total = 0
+        for index, value in enumerate(frame):
+            shift_total += value - background[index]
+        mean_shift = shift_total / len(frame) if frame else 0.0
+
+    for block_y in range(blocks_y):
+        y_start = block_y * block_height
+        y_end = height if block_y == blocks_y - 1 else min(height, y_start + block_height)
+        for block_x in range(blocks_x):
+            x_start = block_x * block_width
+            x_end = width if block_x == blocks_x - 1 else min(width, x_start + block_width)
+            delta_total = 0.0
+            pixel_count = 0
+
+            for y in range(y_start, y_end):
+                row_start = y * width
+                for x in range(x_start, x_end):
+                    index = row_start + x
+                    delta_total += abs((frame[index] - background[index]) - mean_shift)
+                    pixel_count += 1
+
+            mean_delta = delta_total / pixel_count if pixel_count else 0.0
+            if mean_delta >= block_delta:
+                active_blocks += 1
+            total_blocks += 1
+
+    return (
+        active_blocks / total_blocks if total_blocks else 0.0,
+        mean_shift,
+        active_blocks,
+        total_blocks,
+    )
+
+
 def update_background(background: bytearray, frame: bytes, alpha_percent: int) -> None:
     keep = 100 - alpha_percent
     for index, value in enumerate(frame):
@@ -312,6 +363,30 @@ def main() -> int:
     parser.add_argument("--capture-rate", default=30, type=int)
     parser.add_argument("--threshold", default=0.005, type=float)
     parser.add_argument("--pixel-delta", default=40, type=int)
+    parser.add_argument(
+        "--score-mode",
+        choices=("pixel", "block"),
+        default="block",
+        help="Motion scoring algorithm. block is more robust for noisy MJPEG streams.",
+    )
+    parser.add_argument(
+        "--block-grid",
+        default="16x12",
+        type=parse_size,
+        help="Grid used by --score-mode block. Default: 16x12.",
+    )
+    parser.add_argument(
+        "--block-delta",
+        default=6.0,
+        type=float,
+        help="Mean grayscale change needed for one block to count as moving.",
+    )
+    parser.add_argument(
+        "--min-motion-blocks",
+        default=2,
+        type=int,
+        help="Minimum active blocks required in block mode.",
+    )
     parser.add_argument("--consecutive", default=1, type=int)
     parser.add_argument(
         "--simple",
@@ -522,13 +597,27 @@ def main() -> int:
                 continue
 
             luma_pct = mean_luma_pct(frame, sample_step)
-            score, mean_shift = motion_score(
-                frame,
-                background,
-                args.pixel_delta,
-                sample_step,
-                normalize_luminance=not args.no_luminance_normalize,
-            )
+            if args.score_mode == "block":
+                score, mean_shift, active_blocks, total_blocks = block_motion_score(
+                    frame,
+                    background,
+                    args.monitor_size,
+                    args.block_grid,
+                    args.block_delta,
+                    normalize_luminance=not args.no_luminance_normalize,
+                )
+                score_is_motion = score >= args.threshold and active_blocks >= args.min_motion_blocks
+                motion_units_text = f"active_blocks={active_blocks}/{total_blocks}"
+            else:
+                score, mean_shift = motion_score(
+                    frame,
+                    background,
+                    args.pixel_delta,
+                    sample_step,
+                    normalize_luminance=not args.no_luminance_normalize,
+                )
+                score_is_motion = score >= args.threshold
+                motion_units_text = f"pixel_delta={args.pixel_delta}"
             update_background(background, frame, alpha_percent=args.background_alpha)
             best_debug_score = max(best_debug_score, score)
 
@@ -542,7 +631,7 @@ def main() -> int:
                     armed = False
                 else:
                     armed = True
-                    if score >= args.threshold:
+                    if score_is_motion:
                         motion_frames += 1
                     else:
                         motion_frames = 0
@@ -569,7 +658,7 @@ def main() -> int:
                     motion_frames = 0
                     background = bytearray(frame)
 
-            elif score >= args.threshold:
+            elif score_is_motion:
                 motion_frames += 1
             else:
                 motion_frames = 0
@@ -582,6 +671,7 @@ def main() -> int:
                     f"threshold={args.threshold:.4f} "
                     f"mean_shift={mean_shift:.1f} "
                     f"luma={luma_pct:.1f}% "
+                    f"{motion_units_text} "
                     f"armed={int(armed)} "
                     f"quiet_frames={quiet_frames}/{args.arm_after_quiet_frames} "
                     f"motion_frames={motion_frames}/{args.consecutive} "
