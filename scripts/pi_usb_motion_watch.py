@@ -241,6 +241,7 @@ def start_monitor_stream(
     input_size: str,
     monitor_size: tuple[int, int],
     rate: int,
+    process_rate: int | None,
     brightness: str,
     contrast: str,
     gamma: str,
@@ -248,8 +249,9 @@ def start_monitor_stream(
     raw_format: str,
 ) -> subprocess.Popen[bytes]:
     width, height = monitor_size
+    fps_filter = f"fps={process_rate}," if process_rate is not None else ""
     video_filter = (
-        f"fps={rate},"
+        f"{fps_filter}"
         f"eq=brightness={brightness}:contrast={contrast}:gamma={gamma}:saturation={saturation},"
         f"scale={width}:{height},format={raw_format}"
     )
@@ -446,6 +448,11 @@ def main() -> int:
     parser.add_argument("--video-duration", default=5.0, type=float)
     parser.add_argument("--monitor-size", default="320x180", type=parse_size)
     parser.add_argument("-r", "--rate", default=30, type=int)
+    parser.add_argument(
+        "--process-rate",
+        type=int,
+        help="Optional FPS processed by the motion detector. The camera still runs at --rate.",
+    )
     parser.add_argument("--capture-rate", default=30, type=int)
     parser.add_argument("--threshold", default=0.005, type=float)
     parser.add_argument("--pixel-delta", default=40, type=int)
@@ -601,6 +608,7 @@ def main() -> int:
             args.input_size,
             args.monitor_size,
             args.rate,
+            args.process_rate,
             args.brightness,
             args.contrast,
             args.gamma,
@@ -659,6 +667,7 @@ def main() -> int:
                     args.input_size,
                     args.monitor_size,
                     args.rate,
+                    args.process_rate,
                     args.brightness,
                     args.contrast,
                     args.gamma,
@@ -859,6 +868,7 @@ def main() -> int:
                         args.input_size,
                         args.monitor_size,
                         args.rate,
+                        args.process_rate,
                         args.brightness,
                         args.contrast,
                         args.gamma,
