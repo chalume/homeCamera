@@ -271,6 +271,12 @@ def main() -> int:
         type=float,
         help="Seconds to ignore motion while exposure/background stabilizes.",
     )
+    parser.add_argument(
+        "--arm-after-quiet-frames",
+        default=5,
+        type=int,
+        help="Quiet frames required before motion detection is armed.",
+    )
     parser.add_argument("--background-alpha", default=3, type=int)
     parser.add_argument("--no-luminance-normalize", action="store_true")
     parser.add_argument("--cooldown", default=30, type=float)
@@ -338,6 +344,8 @@ def main() -> int:
     last_debug_at = 0.0
     best_debug_score = 0.0
     settle_until = time.monotonic() + args.settle_seconds
+    armed = False
+    quiet_frames = 0
 
     try:
         if args.force_capture:
@@ -420,14 +428,29 @@ def main() -> int:
             update_background(background, frame, alpha_percent=args.background_alpha)
             best_debug_score = max(best_debug_score, score)
 
-            if score >= args.threshold:
-                motion_frames += 1
-            else:
-                motion_frames = 0
-
             now = time.monotonic()
             settling_remaining = max(0.0, settle_until - now)
-            if settling_remaining > 0.0:
+
+            if not armed:
+                if settling_remaining > 0.0:
+                    quiet_frames = 0
+                    motion_frames = 0
+                    background = bytearray(frame)
+                elif score < args.threshold:
+                    quiet_frames += 1
+                    motion_frames = 0
+                    if quiet_frames >= args.arm_after_quiet_frames:
+                        armed = True
+                        background = bytearray(frame)
+                        print("Motion detection armed.")
+                else:
+                    quiet_frames = 0
+                    motion_frames = 0
+                    background = bytearray(frame)
+
+            elif score >= args.threshold:
+                motion_frames += 1
+            else:
                 motion_frames = 0
 
             cooldown_remaining = max(0.0, args.cooldown - (now - last_capture_at))
@@ -438,6 +461,8 @@ def main() -> int:
                     f"threshold={args.threshold:.4f} "
                     f"mean_shift={mean_shift:.1f} "
                     f"luma={luma_pct:.1f}% "
+                    f"armed={int(armed)} "
+                    f"quiet_frames={quiet_frames}/{args.arm_after_quiet_frames} "
                     f"motion_frames={motion_frames}/{args.consecutive} "
                     f"settling_remaining={settling_remaining:.1f}s "
                     f"cooldown_remaining={cooldown_remaining:.1f}s"
@@ -473,6 +498,8 @@ def main() -> int:
                 motion_frames = 0
                 background = None
                 settle_until = time.monotonic() + args.settle_seconds
+                armed = False
+                quiet_frames = 0
 
                 if args.monitor_mode == "stream":
                     process = start_monitor_stream(
