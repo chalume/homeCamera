@@ -305,6 +305,18 @@ def stop_monitor_stream(process: subprocess.Popen[bytes], timeout: float = 3.0) 
         process.wait(timeout=timeout)
 
 
+def read_exact(stream: object, size: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining > 0:
+        chunk = stream.read(remaining)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
 def capture_snapshot_frame(
     script_dir: Path,
     device: str,
@@ -679,7 +691,7 @@ def main() -> int:
             if args.monitor_mode == "stream":
                 assert process is not None
                 assert process.stdout is not None
-                raw_frame = process.stdout.read(stream_frame_len)
+                raw_frame = read_exact(process.stdout, stream_frame_len)
                 spot_text = ""
                 if not raw_frame:
                     frame = b""
