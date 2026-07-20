@@ -252,8 +252,9 @@ def start_monitor_stream(
     fps_filter = f"fps={process_rate}," if process_rate is not None else ""
     video_filter = (
         f"{fps_filter}"
+        f"scale={width}:{height},"
         f"eq=brightness={brightness}:contrast={contrast}:gamma={gamma}:saturation={saturation},"
-        f"scale={width}:{height},format={raw_format}"
+        f"format={raw_format}"
     )
     command = [
         "ffmpeg",
