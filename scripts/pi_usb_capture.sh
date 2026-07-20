@@ -12,7 +12,7 @@ Options:
   -o, --output PATH      Output image path. Default: captures/pi-usb-YYYYmmdd-HHMMSS.jpg
   -s, --size WxH         Capture size. Default: 1280x720
   -r, --rate FPS         Framerate. Default: 30
-  --warmup-frames N      Frames to discard before saving. Default: 60
+  --warmup-frames N      Frames to discard before saving. Default: 1
   --input-format FORMAT  V4L2 input format. Default: mjpeg
   --brightness VALUE     FFmpeg brightness, -1.0 to 1.0. Default: 0
   --contrast VALUE       FFmpeg contrast multiplier. Default: 1
@@ -27,7 +27,7 @@ STAMP="$(date +%Y%m%d-%H%M%S)"
 OUT="captures/pi-usb-${STAMP}.jpg"
 SIZE="1280x720"
 RATE="30"
-WARMUP_FRAMES="60"
+WARMUP_FRAMES="1"
 INPUT_FORMAT="mjpeg"
 BRIGHTNESS="0"
 CONTRAST="1"
