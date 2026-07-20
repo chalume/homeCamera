@@ -265,6 +265,12 @@ def main() -> int:
     parser.add_argument("--threshold", default=0.005, type=float)
     parser.add_argument("--pixel-delta", default=40, type=int)
     parser.add_argument("--consecutive", default=1, type=int)
+    parser.add_argument(
+        "--settle-seconds",
+        default=5.0,
+        type=float,
+        help="Seconds to ignore motion while exposure/background stabilizes.",
+    )
     parser.add_argument("--background-alpha", default=3, type=int)
     parser.add_argument("--no-luminance-normalize", action="store_true")
     parser.add_argument("--cooldown", default=30, type=float)
@@ -331,6 +337,7 @@ def main() -> int:
     last_capture_at = 0.0
     last_debug_at = 0.0
     best_debug_score = 0.0
+    settle_until = time.monotonic() + args.settle_seconds
 
     try:
         if args.force_capture:
@@ -419,6 +426,10 @@ def main() -> int:
                 motion_frames = 0
 
             now = time.monotonic()
+            settling_remaining = max(0.0, settle_until - now)
+            if settling_remaining > 0.0:
+                motion_frames = 0
+
             cooldown_remaining = max(0.0, args.cooldown - (now - last_capture_at))
             if args.debug and now - last_debug_at >= 1.0:
                 print(
@@ -428,6 +439,7 @@ def main() -> int:
                     f"mean_shift={mean_shift:.1f} "
                     f"luma={luma_pct:.1f}% "
                     f"motion_frames={motion_frames}/{args.consecutive} "
+                    f"settling_remaining={settling_remaining:.1f}s "
                     f"cooldown_remaining={cooldown_remaining:.1f}s"
                 )
                 last_debug_at = now
@@ -460,6 +472,7 @@ def main() -> int:
                 last_capture_at = now
                 motion_frames = 0
                 background = None
+                settle_until = time.monotonic() + args.settle_seconds
 
                 if args.monitor_mode == "stream":
                     process = start_monitor_stream(
