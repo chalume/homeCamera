@@ -1,0 +1,13 @@
+[Unit]
+Description=homeCamera one-shot Discord notification test
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/pi/homeCamera
+EnvironmentFile=/home/pi/homeCamera/.env
+ExecStart=/home/pi/homeCamera/scripts/capture_and_notify.sh
+
+[Install]
+WantedBy=multi-user.target

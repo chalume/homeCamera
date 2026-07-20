@@ -1,0 +1,8 @@
+__pycache__/
+.venv/
+.env
+captures/
+*.jpg
+*.jpeg
+*.h264
+*.mp4

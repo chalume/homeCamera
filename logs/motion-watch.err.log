@@ -1,0 +1,2 @@
+shell-init: error retrieving current directory: getcwd: cannot access parent directories: Operation not permitted
+bash: /Users/benoit.hautefeuille/Documents/GitHub/homeCamera/scripts/run_mac_usb_motion_watch.sh: Operation not permitted
