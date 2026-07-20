@@ -249,6 +249,7 @@ def start_monitor_stream(
 ) -> subprocess.Popen[bytes]:
     width, height = monitor_size
     video_filter = (
+        f"fps={rate},"
         f"eq=brightness={brightness}:contrast={contrast}:gamma={gamma}:saturation={saturation},"
         f"scale={width}:{height},format={raw_format}"
     )
@@ -257,6 +258,16 @@ def start_monitor_stream(
         "-hide_banner",
         "-loglevel",
         "error",
+        "-fflags",
+        "nobuffer",
+        "-flags",
+        "low_delay",
+        "-probesize",
+        "32",
+        "-analyzeduration",
+        "0",
+        "-thread_queue_size",
+        "1",
         "-f",
         "v4l2",
         "-input_format",
@@ -274,7 +285,7 @@ def start_monitor_stream(
         "pipe:1",
     ]
 
-    return subprocess.Popen(command, stdout=subprocess.PIPE)
+    return subprocess.Popen(command, stdout=subprocess.PIPE, bufsize=0)
 
 
 def stop_monitor_stream(process: subprocess.Popen[bytes], timeout: float = 3.0) -> None:
@@ -612,6 +623,7 @@ def main() -> int:
     motion_frames = 0
     last_capture_at = 0.0
     last_debug_at = 0.0
+    frames_since_debug = 0
     best_debug_score = 0.0
     settle_until = time.monotonic() + args.settle_seconds
     armed = False
@@ -702,6 +714,7 @@ def main() -> int:
             if len(frame) != frame_len:
                 print(f"Incomplete frame received: {len(frame)} != {frame_len}", file=sys.stderr)
                 return 1
+            frames_since_debug += 1
 
             if background is None:
                 background = bytearray(frame)
@@ -787,10 +800,13 @@ def main() -> int:
 
             cooldown_remaining = max(0.0, args.cooldown - (now - last_capture_at))
             if args.debug and now - last_debug_at >= 1.0:
+                debug_elapsed = now - last_debug_at if last_debug_at else 0.0
+                processed_fps = frames_since_debug / debug_elapsed if debug_elapsed > 0 else 0.0
                 print(
                     "score="
                     f"{score:.4f} best={best_debug_score:.4f} "
                     f"threshold={args.threshold:.4f} "
+                    f"processed_fps={processed_fps:.1f} "
                     f"mean_shift={mean_shift:.1f} "
                     f"luma={luma_pct:.1f}% "
                     f"{spot_text} "
@@ -802,6 +818,7 @@ def main() -> int:
                     f"cooldown_remaining={cooldown_remaining:.1f}s"
                 )
                 last_debug_at = now
+                frames_since_debug = 0
                 best_debug_score = 0.0
 
             can_capture = cooldown_remaining <= 0.0
