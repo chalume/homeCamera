@@ -266,6 +266,11 @@ def main() -> int:
     parser.add_argument("--pixel-delta", default=40, type=int)
     parser.add_argument("--consecutive", default=1, type=int)
     parser.add_argument(
+        "--simple",
+        action="store_true",
+        help="Use Mac-like detection loop: no arming, only settle time and cooldown.",
+    )
+    parser.add_argument(
         "--settle-seconds",
         default=5.0,
         type=float,
@@ -431,7 +436,19 @@ def main() -> int:
             now = time.monotonic()
             settling_remaining = max(0.0, settle_until - now)
 
-            if not armed:
+            if args.simple:
+                if settling_remaining > 0.0:
+                    motion_frames = 0
+                    background = bytearray(frame)
+                    armed = False
+                else:
+                    armed = True
+                    if score >= args.threshold:
+                        motion_frames += 1
+                    else:
+                        motion_frames = 0
+
+            elif not armed:
                 if settling_remaining > 0.0:
                     quiet_frames = 0
                     motion_frames = 0
