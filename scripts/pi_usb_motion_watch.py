@@ -195,6 +195,49 @@ def spot_stats_text(
     )
 
 
+def gray_spot_stats_text(
+    gray_frame: bytes,
+    frame_size: tuple[int, int],
+    spot_size: tuple[int, int],
+    stddev_history: deque[float],
+) -> str:
+    width, height = frame_size
+    spot_width = min(spot_size[0], width)
+    spot_height = min(spot_size[1], height)
+    x_start = max(0, (width - spot_width) // 2)
+    y_start = max(0, (height - spot_height) // 2)
+    x_end = x_start + spot_width
+    y_end = y_start + spot_height
+
+    gray_total = 0
+    gray_square_total = 0
+    count = 0
+
+    for y in range(y_start, y_end):
+        row_start = y * width
+        for x in range(x_start, x_end):
+            gray = gray_frame[row_start + x]
+            gray_total += gray
+            gray_square_total += gray * gray
+            count += 1
+
+    if not count:
+        return "spot=empty"
+
+    gray_mean = gray_total / count
+    variance = max(0.0, (gray_square_total / count) - (gray_mean * gray_mean))
+    gray_stddev = math.sqrt(variance)
+    stddev_history.append(gray_stddev)
+    gray_stddev_5 = sum(stddev_history) / len(stddev_history)
+
+    return (
+        f"spot=center:{spot_width}x{spot_height} "
+        f"spot_gray={gray_mean:.1f} "
+        f"spot_gray_std={gray_stddev:.2f} "
+        f"spot_gray_std5={gray_stddev_5:.2f}"
+    )
+
+
 def set_camera_controls(
     device: str,
     auto_exposure: str | None,
@@ -555,6 +598,11 @@ def main() -> int:
         help="Log RGB/gray statistics for a centered spot in the monitor image.",
     )
     parser.add_argument(
+        "--debug-spot-gray",
+        action="store_true",
+        help="Log lightweight gray-only statistics for a centered spot.",
+    )
+    parser.add_argument(
         "--spot-size",
         default="40x40",
         type=parse_size,
@@ -712,6 +760,13 @@ def main() -> int:
                     )
                 else:
                     frame = raw_frame
+                    if args.debug_spot_gray:
+                        spot_text = gray_spot_stats_text(
+                            frame,
+                            args.monitor_size,
+                            args.spot_size,
+                            spot_stddev_history,
+                        )
             else:
                 assert temp_dir is not None
                 frame = capture_snapshot_frame(
