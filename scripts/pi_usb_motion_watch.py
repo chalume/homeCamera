@@ -187,8 +187,9 @@ def capture_media(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("-d", "--device", default="/dev/video0")
-    parser.add_argument("--input-format", default="mjpeg")
+    parser.add_argument("--input-format", default="yuyv422")
     parser.add_argument("--input-size", default="640x480")
+    parser.add_argument("--capture-input-format", default="mjpeg")
     parser.add_argument("--capture-size", default="1280x720")
     parser.add_argument("--capture-kind", choices=("photo", "video"), default="video")
     parser.add_argument("--video-duration", default=5.0, type=float)
@@ -209,6 +210,11 @@ def main() -> int:
     parser.add_argument("--discord", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--force-capture", action="store_true")
+    parser.add_argument(
+        "--dump-monitor-frame",
+        type=Path,
+        help="Write one monitor frame as a grayscale PGM image, then exit.",
+    )
     parser.add_argument("--message", default="Mouvement detecte dans le garage.")
     args = parser.parse_args()
 
@@ -224,7 +230,7 @@ def main() -> int:
     print("Starting Raspberry USB motion watch.")
     print(f"Device: {args.device}")
     print(f"Monitor: {args.input_format} {args.input_size}@{args.rate} -> {args.monitor_size[0]}x{args.monitor_size[1]}")
-    print(f"Capture: {args.capture_kind}, {args.capture_size}@{args.capture_rate}")
+    print(f"Capture: {args.capture_kind}, {args.capture_input_format} {args.capture_size}@{args.capture_rate}")
     print("Press Ctrl+C to stop.")
 
     process = start_monitor_stream(
@@ -258,7 +264,7 @@ def main() -> int:
                 script_dir,
                 args.capture_kind,
                 args.device,
-                args.input_format,
+                args.capture_input_format,
                 args.capture_size,
                 args.capture_rate,
                 args.video_duration,
@@ -291,6 +297,12 @@ def main() -> int:
 
             if background is None:
                 background = bytearray(frame)
+                if args.dump_monitor_frame:
+                    args.dump_monitor_frame.parent.mkdir(parents=True, exist_ok=True)
+                    header = f"P5\n{args.monitor_size[0]} {args.monitor_size[1]}\n255\n".encode()
+                    args.dump_monitor_frame.write_bytes(header + frame)
+                    print(args.dump_monitor_frame)
+                    return 0
                 continue
 
             luma_pct = mean_luma_pct(frame, sample_step)
@@ -334,7 +346,7 @@ def main() -> int:
                     script_dir,
                     args.capture_kind,
                     args.device,
-                    args.input_format,
+                    args.capture_input_format,
                     args.capture_size,
                     args.capture_rate,
                     args.video_duration,
