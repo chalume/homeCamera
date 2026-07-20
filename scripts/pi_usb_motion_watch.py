@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import signal
 import subprocess
 import sys
 import tempfile
 import time
+from collections import deque
 from pathlib import Path
 
 
@@ -127,6 +129,72 @@ def mean_luma_pct(frame: bytes, sample_step: int) -> float:
     return (total / count / 255 * 100) if count else 0.0
 
 
+def rgb_to_gray(frame: bytes) -> bytes:
+    gray = bytearray(len(frame) // 3)
+    output_index = 0
+    for index in range(0, len(frame), 3):
+        red = frame[index]
+        green = frame[index + 1]
+        blue = frame[index + 2]
+        gray[output_index] = (77 * red + 150 * green + 29 * blue) // 256
+        output_index += 1
+    return bytes(gray)
+
+
+def spot_stats_text(
+    rgb_frame: bytes,
+    frame_size: tuple[int, int],
+    spot_size: tuple[int, int],
+    stddev_history: deque[float],
+) -> str:
+    width, height = frame_size
+    spot_width = min(spot_size[0], width)
+    spot_height = min(spot_size[1], height)
+    x_start = max(0, (width - spot_width) // 2)
+    y_start = max(0, (height - spot_height) // 2)
+    x_end = x_start + spot_width
+    y_end = y_start + spot_height
+
+    red_total = 0
+    green_total = 0
+    blue_total = 0
+    gray_total = 0
+    gray_square_total = 0
+    count = 0
+
+    for y in range(y_start, y_end):
+        row_start = y * width * 3
+        for x in range(x_start, x_end):
+            index = row_start + (x * 3)
+            red = rgb_frame[index]
+            green = rgb_frame[index + 1]
+            blue = rgb_frame[index + 2]
+            gray = (77 * red + 150 * green + 29 * blue) // 256
+            red_total += red
+            green_total += green
+            blue_total += blue
+            gray_total += gray
+            gray_square_total += gray * gray
+            count += 1
+
+    if not count:
+        return "spot=empty"
+
+    gray_mean = gray_total / count
+    variance = max(0.0, (gray_square_total / count) - (gray_mean * gray_mean))
+    gray_stddev = math.sqrt(variance)
+    stddev_history.append(gray_stddev)
+    gray_stddev_5 = sum(stddev_history) / len(stddev_history)
+
+    return (
+        f"spot=center:{spot_width}x{spot_height} "
+        f"spot_gray={gray_mean:.1f} "
+        f"spot_rgb=({red_total / count:.1f},{green_total / count:.1f},{blue_total / count:.1f}) "
+        f"spot_gray_std={gray_stddev:.2f} "
+        f"spot_gray_std5={gray_stddev_5:.2f}"
+    )
+
+
 def set_camera_controls(
     device: str,
     auto_exposure: str | None,
@@ -177,11 +245,12 @@ def start_monitor_stream(
     contrast: str,
     gamma: str,
     saturation: str,
+    raw_format: str,
 ) -> subprocess.Popen[bytes]:
     width, height = monitor_size
     video_filter = (
         f"eq=brightness={brightness}:contrast={contrast}:gamma={gamma}:saturation={saturation},"
-        f"scale={width}:{height},format=gray"
+        f"scale={width}:{height},format={raw_format}"
     )
     command = [
         "ffmpeg",
@@ -449,6 +518,17 @@ def main() -> int:
     parser.add_argument("--backlight-compensation", type=int)
     parser.add_argument("--discord", action="store_true")
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument(
+        "--debug-spot",
+        action="store_true",
+        help="Log RGB/gray statistics for a centered spot in the monitor image.",
+    )
+    parser.add_argument(
+        "--spot-size",
+        default="40x40",
+        type=parse_size,
+        help="Centered spot size used by --debug-spot. Default: 40x40.",
+    )
     parser.add_argument("--force-capture", action="store_true")
     parser.add_argument(
         "--dump-monitor-frame",
@@ -465,6 +545,8 @@ def main() -> int:
     script_dir = Path(__file__).resolve().parent
     args.output_dir.mkdir(parents=True, exist_ok=True)
     frame_len = args.monitor_size[0] * args.monitor_size[1]
+    stream_raw_format = "rgb24" if args.debug_spot else "gray"
+    stream_frame_len = frame_len * (3 if args.debug_spot else 1)
     sample_step = max(1, frame_len // 12000)
     auto_exposure_value = None
     if args.auto_exposure == "manual":
@@ -512,6 +594,7 @@ def main() -> int:
             args.contrast,
             args.gamma,
             args.saturation,
+            stream_raw_format,
         )
     else:
         temp_context = tempfile.TemporaryDirectory(prefix="homecamera-monitor-")
@@ -533,6 +616,7 @@ def main() -> int:
     settle_until = time.monotonic() + args.settle_seconds
     armed = False
     quiet_frames = 0
+    spot_stddev_history: deque[float] = deque(maxlen=5)
 
     try:
         if args.force_capture:
@@ -567,13 +651,33 @@ def main() -> int:
                     args.contrast,
                     args.gamma,
                     args.saturation,
+                    stream_raw_format,
                 )
 
         while True:
             if args.monitor_mode == "stream":
                 assert process is not None
                 assert process.stdout is not None
-                frame = process.stdout.read(frame_len)
+                raw_frame = process.stdout.read(stream_frame_len)
+                spot_text = ""
+                if not raw_frame:
+                    frame = b""
+                elif len(raw_frame) != stream_frame_len:
+                    print(
+                        f"Incomplete raw frame received: {len(raw_frame)} != {stream_frame_len}",
+                        file=sys.stderr,
+                    )
+                    return 1
+                elif args.debug_spot:
+                    frame = rgb_to_gray(raw_frame)
+                    spot_text = spot_stats_text(
+                        raw_frame,
+                        args.monitor_size,
+                        args.spot_size,
+                        spot_stddev_history,
+                    )
+                else:
+                    frame = raw_frame
             else:
                 assert temp_dir is not None
                 frame = capture_snapshot_frame(
@@ -589,6 +693,7 @@ def main() -> int:
                     args.saturation,
                     temp_dir,
                 )
+                spot_text = ""
                 time.sleep(args.snapshot_interval)
 
             if not frame:
@@ -688,6 +793,7 @@ def main() -> int:
                     f"threshold={args.threshold:.4f} "
                     f"mean_shift={mean_shift:.1f} "
                     f"luma={luma_pct:.1f}% "
+                    f"{spot_text} "
                     f"{motion_units_text} "
                     f"armed={int(armed)} "
                     f"quiet_frames={quiet_frames}/{args.arm_after_quiet_frames} "
@@ -740,6 +846,7 @@ def main() -> int:
                         args.contrast,
                         args.gamma,
                         args.saturation,
+                        stream_raw_format,
                     )
 
     except KeyboardInterrupt:
