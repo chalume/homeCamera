@@ -273,9 +273,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--arm-after-quiet-frames",
-        default=5,
+        default=0,
         type=int,
-        help="Quiet frames required before motion detection is armed.",
+        help="Quiet frames required before motion detection is armed. Default: 0",
     )
     parser.add_argument("--background-alpha", default=3, type=int)
     parser.add_argument("--no-luminance-normalize", action="store_true")
@@ -436,6 +436,11 @@ def main() -> int:
                     quiet_frames = 0
                     motion_frames = 0
                     background = bytearray(frame)
+                elif args.arm_after_quiet_frames <= 0:
+                    armed = True
+                    motion_frames = 0
+                    background = bytearray(frame)
+                    print("Motion detection armed.")
                 elif score < args.threshold:
                     quiet_frames += 1
                     motion_frames = 0
