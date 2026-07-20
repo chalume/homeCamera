@@ -13,6 +13,7 @@ Options:
   -s, --size WxH         Capture size. Default: 1280x720
   -r, --rate FPS         Framerate. Default: 30
   --duration SEC         Video duration. Default: 5
+  --warmup-sec SEC       Seconds to discard before saving. Default: 2
   --input-format FORMAT  V4L2 input format. Default: mjpeg
   --brightness VALUE     FFmpeg brightness, -1.0 to 1.0. Default: 0
   --contrast VALUE       FFmpeg contrast multiplier. Default: 1
@@ -28,6 +29,7 @@ OUT="captures/pi-usb-${STAMP}.mp4"
 SIZE="1280x720"
 RATE="30"
 DURATION="5"
+WARMUP_SEC="2"
 INPUT_FORMAT="mjpeg"
 BRIGHTNESS="0"
 CONTRAST="1"
@@ -54,6 +56,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --duration)
       DURATION="${2:?Missing value for $1}"
+      shift 2
+      ;;
+    --warmup-sec)
+      WARMUP_SEC="${2:?Missing value for $1}"
       shift 2
       ;;
     --input-format)
@@ -89,6 +95,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 DURATION="${DURATION/,/.}"
+WARMUP_SEC="${WARMUP_SEC/,/.}"
 BRIGHTNESS="${BRIGHTNESS/,/.}"
 CONTRAST="${CONTRAST/,/.}"
 GAMMA="${GAMMA/,/.}"
@@ -105,7 +112,7 @@ ffmpeg \
   -framerate "$RATE" \
   -i "$DEVICE" \
   -t "$DURATION" \
-  -vf "eq=brightness=${BRIGHTNESS}:contrast=${CONTRAST}:gamma=${GAMMA}:saturation=${SATURATION}" \
+  -vf "trim=start=${WARMUP_SEC},setpts=PTS-STARTPTS,eq=brightness=${BRIGHTNESS}:contrast=${CONTRAST}:gamma=${GAMMA}:saturation=${SATURATION}" \
   -an \
   -c:v libx264 \
   -preset veryfast \
