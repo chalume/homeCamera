@@ -8,6 +8,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -117,6 +118,69 @@ def stop_monitor_stream(process: subprocess.Popen[bytes], timeout: float = 3.0) 
         process.wait(timeout=timeout)
 
 
+def capture_snapshot_frame(
+    script_dir: Path,
+    device: str,
+    input_format: str,
+    input_size: str,
+    rate: int,
+    monitor_size: tuple[int, int],
+    brightness: str,
+    contrast: str,
+    gamma: str,
+    saturation: str,
+    temp_dir: Path,
+) -> bytes:
+    temp_jpg = temp_dir / "monitor.jpg"
+    subprocess.run(
+        [
+            str(script_dir / "pi_usb_capture.sh"),
+            "-d",
+            device,
+            "-s",
+            input_size,
+            "-r",
+            str(rate),
+            "--input-format",
+            input_format,
+            "-o",
+            str(temp_jpg),
+            "--brightness",
+            brightness,
+            "--contrast",
+            contrast,
+            "--gamma",
+            gamma,
+            "--saturation",
+            saturation,
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+
+    width, height = monitor_size
+    result = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(temp_jpg),
+            "-vf",
+            f"scale={width}:{height},format=gray",
+            "-frames:v",
+            "1",
+            "-f",
+            "rawvideo",
+            "pipe:1",
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+    )
+    return result.stdout
+
+
 def capture_media(
     script_dir: Path,
     capture_kind: str,
@@ -187,8 +251,10 @@ def capture_media(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("-d", "--device", default="/dev/video0")
-    parser.add_argument("--input-format", default="yuyv422")
+    parser.add_argument("--input-format", default="mjpeg")
     parser.add_argument("--input-size", default="640x480")
+    parser.add_argument("--monitor-mode", choices=("snapshot", "stream"), default="snapshot")
+    parser.add_argument("--snapshot-interval", default=1.0, type=float)
     parser.add_argument("--capture-input-format", default="mjpeg")
     parser.add_argument("--capture-size", default="1280x720")
     parser.add_argument("--capture-kind", choices=("photo", "video"), default="video")
@@ -229,20 +295,32 @@ def main() -> int:
 
     print("Starting Raspberry USB motion watch.")
     print(f"Device: {args.device}")
-    print(f"Monitor: {args.input_format} {args.input_size}@{args.rate} -> {args.monitor_size[0]}x{args.monitor_size[1]}")
+    print(
+        f"Monitor: {args.monitor_mode}, {args.input_format} "
+        f"{args.input_size}@{args.rate} -> {args.monitor_size[0]}x{args.monitor_size[1]}"
+    )
     print(f"Capture: {args.capture_kind}, {args.capture_input_format} {args.capture_size}@{args.capture_rate}")
     print("Press Ctrl+C to stop.")
 
-    process = start_monitor_stream(
-        args.device,
-        args.input_format,
-        args.input_size,
-        args.monitor_size,
-        args.rate,
-    )
+    process: subprocess.Popen[bytes] | None = None
+    temp_context: tempfile.TemporaryDirectory[str] | None = None
+    temp_dir: Path | None = None
+
+    if args.monitor_mode == "stream":
+        process = start_monitor_stream(
+            args.device,
+            args.input_format,
+            args.input_size,
+            args.monitor_size,
+            args.rate,
+        )
+    else:
+        temp_context = tempfile.TemporaryDirectory(prefix="homecamera-monitor-")
+        temp_dir = Path(temp_context.name)
 
     def stop_process(_signum: int, _frame: object) -> None:
-        stop_monitor_stream(process)
+        if process is not None:
+            stop_monitor_stream(process)
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGINT, stop_process)
@@ -255,11 +333,10 @@ def main() -> int:
     best_debug_score = 0.0
 
     try:
-        assert process.stdout is not None
-
         if args.force_capture:
             print("Force capture requested.")
-            stop_monitor_stream(process)
+            if process is not None:
+                stop_monitor_stream(process)
             output_path = capture_media(
                 script_dir,
                 args.capture_kind,
@@ -277,22 +354,42 @@ def main() -> int:
                 args.message,
             )
             print(output_path)
-            process = start_monitor_stream(
-                args.device,
-                args.input_format,
-                args.input_size,
-                args.monitor_size,
-                args.rate,
-            )
-            assert process.stdout is not None
+            if args.monitor_mode == "stream":
+                process = start_monitor_stream(
+                    args.device,
+                    args.input_format,
+                    args.input_size,
+                    args.monitor_size,
+                    args.rate,
+                )
 
         while True:
-            frame = process.stdout.read(frame_len)
+            if args.monitor_mode == "stream":
+                assert process is not None
+                assert process.stdout is not None
+                frame = process.stdout.read(frame_len)
+            else:
+                assert temp_dir is not None
+                frame = capture_snapshot_frame(
+                    script_dir,
+                    args.device,
+                    args.input_format,
+                    args.input_size,
+                    args.rate,
+                    args.monitor_size,
+                    args.brightness,
+                    args.contrast,
+                    args.gamma,
+                    args.saturation,
+                    temp_dir,
+                )
+                time.sleep(args.snapshot_interval)
+
             if not frame:
                 print("ffmpeg stream ended.", file=sys.stderr)
-                return process.wait() or 1
+                return (process.wait() if process is not None else 1) or 1
             if len(frame) != frame_len:
-                print("Incomplete frame received.", file=sys.stderr)
+                print(f"Incomplete frame received: {len(frame)} != {frame_len}", file=sys.stderr)
                 return 1
 
             if background is None:
@@ -339,7 +436,8 @@ def main() -> int:
             can_capture = cooldown_remaining <= 0.0
             if motion_frames >= args.consecutive and can_capture:
                 print(f"Motion detected: score={score:.3f}")
-                stop_monitor_stream(process)
+                if process is not None:
+                    stop_monitor_stream(process)
                 time.sleep(0.5)
 
                 output_path = capture_media(
@@ -363,20 +461,23 @@ def main() -> int:
                 motion_frames = 0
                 background = None
 
-                process = start_monitor_stream(
-                    args.device,
-                    args.input_format,
-                    args.input_size,
-                    args.monitor_size,
-                    args.rate,
-                )
-                assert process.stdout is not None
+                if args.monitor_mode == "stream":
+                    process = start_monitor_stream(
+                        args.device,
+                        args.input_format,
+                        args.input_size,
+                        args.monitor_size,
+                        args.rate,
+                    )
 
     except KeyboardInterrupt:
         print("\nStopped.")
         return 0
     finally:
-        stop_monitor_stream(process)
+        if process is not None:
+            stop_monitor_stream(process)
+        if temp_context is not None:
+            temp_context.cleanup()
 
 
 if __name__ == "__main__":
