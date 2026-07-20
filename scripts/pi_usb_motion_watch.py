@@ -70,14 +70,62 @@ def mean_luma_pct(frame: bytes, sample_step: int) -> float:
     return (total / count / 255 * 100) if count else 0.0
 
 
+def set_camera_controls(
+    device: str,
+    auto_exposure: str | None,
+    exposure_time: int | None,
+    gain: int | None,
+    camera_brightness: int | None,
+    white_balance_auto: str | None,
+    white_balance_temperature: int | None,
+    backlight_compensation: int | None,
+) -> None:
+    controls: list[str] = []
+    if auto_exposure is not None:
+        controls.append(f"auto_exposure={auto_exposure}")
+    if exposure_time is not None:
+        controls.append(f"exposure_time_absolute={exposure_time}")
+    if gain is not None:
+        controls.append(f"gain={gain}")
+    if camera_brightness is not None:
+        controls.append(f"brightness={camera_brightness}")
+    if white_balance_auto is not None:
+        controls.append(f"white_balance_automatic={white_balance_auto}")
+    if white_balance_temperature is not None:
+        controls.append(f"white_balance_temperature={white_balance_temperature}")
+    if backlight_compensation is not None:
+        controls.append(f"backlight_compensation={backlight_compensation}")
+
+    if not controls:
+        return
+
+    subprocess.run(
+        [
+            "v4l2-ctl",
+            "-d",
+            device,
+            f"--set-ctrl={','.join(controls)}",
+        ],
+        check=True,
+    )
+
+
 def start_monitor_stream(
     device: str,
     input_format: str,
     input_size: str,
     monitor_size: tuple[int, int],
     rate: int,
+    brightness: str,
+    contrast: str,
+    gamma: str,
+    saturation: str,
 ) -> subprocess.Popen[bytes]:
     width, height = monitor_size
+    video_filter = (
+        f"eq=brightness={brightness}:contrast={contrast}:gamma={gamma}:saturation={saturation},"
+        f"scale={width}:{height},format=gray"
+    )
     command = [
         "ffmpeg",
         "-hide_banner",
@@ -94,7 +142,7 @@ def start_monitor_stream(
         "-i",
         device,
         "-vf",
-        f"scale={width}:{height},format=gray",
+        video_filter,
         "-f",
         "rawvideo",
         "pipe:1",
@@ -267,8 +315,15 @@ def main() -> int:
     parser.add_argument("--consecutive", default=1, type=int)
     parser.add_argument(
         "--simple",
+        default=True,
         action="store_true",
         help="Use Mac-like detection loop: no arming, only settle time and cooldown.",
+    )
+    parser.add_argument(
+        "--advanced-arm",
+        dest="simple",
+        action="store_false",
+        help="Use the experimental quiet-frame arming logic.",
     )
     parser.add_argument(
         "--settle-seconds",
@@ -290,6 +345,21 @@ def main() -> int:
     parser.add_argument("--contrast", default="1")
     parser.add_argument("--gamma", default="1")
     parser.add_argument("--saturation", default="1")
+    parser.add_argument(
+        "--auto-exposure",
+        choices=("manual", "auto"),
+        help="V4L2 exposure mode. manual=1, auto=3 on this UVC camera.",
+    )
+    parser.add_argument("--exposure-time", type=int, help="V4L2 exposure_time_absolute value.")
+    parser.add_argument("--gain", type=int, help="V4L2 gain value.")
+    parser.add_argument("--camera-brightness", type=int, help="V4L2 hardware brightness value.")
+    parser.add_argument(
+        "--white-balance-auto",
+        choices=("off", "on"),
+        help="V4L2 automatic white balance.",
+    )
+    parser.add_argument("--white-balance-temperature", type=int)
+    parser.add_argument("--backlight-compensation", type=int)
     parser.add_argument("--discord", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--force-capture", action="store_true")
@@ -309,6 +379,27 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     frame_len = args.monitor_size[0] * args.monitor_size[1]
     sample_step = max(1, frame_len // 12000)
+    auto_exposure_value = None
+    if args.auto_exposure == "manual":
+        auto_exposure_value = "1"
+    elif args.auto_exposure == "auto":
+        auto_exposure_value = "3"
+    white_balance_auto_value = None
+    if args.white_balance_auto == "off":
+        white_balance_auto_value = "0"
+    elif args.white_balance_auto == "on":
+        white_balance_auto_value = "1"
+
+    set_camera_controls(
+        args.device,
+        auto_exposure_value,
+        args.exposure_time,
+        args.gain,
+        args.camera_brightness,
+        white_balance_auto_value,
+        args.white_balance_temperature,
+        args.backlight_compensation,
+    )
 
     print("Starting Raspberry USB motion watch.")
     print(f"Device: {args.device}")
@@ -330,6 +421,10 @@ def main() -> int:
             args.input_size,
             args.monitor_size,
             args.rate,
+            args.brightness,
+            args.contrast,
+            args.gamma,
+            args.saturation,
         )
     else:
         temp_context = tempfile.TemporaryDirectory(prefix="homecamera-monitor-")
@@ -381,6 +476,10 @@ def main() -> int:
                     args.input_size,
                     args.monitor_size,
                     args.rate,
+                    args.brightness,
+                    args.contrast,
+                    args.gamma,
+                    args.saturation,
                 )
 
         while True:
@@ -530,6 +629,10 @@ def main() -> int:
                         args.input_size,
                         args.monitor_size,
                         args.rate,
+                        args.brightness,
+                        args.contrast,
+                        args.gamma,
+                        args.saturation,
                     )
 
     except KeyboardInterrupt:
