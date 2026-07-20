@@ -60,15 +60,17 @@ def block_motion_score(
     background: bytearray,
     frame_size: tuple[int, int],
     block_grid: tuple[int, int],
-    block_delta: float,
+    pixel_delta: int,
+    block_pixel_ratio: float,
     normalize_luminance: bool,
-) -> tuple[float, float, int, int]:
+) -> tuple[float, float, int, int, float]:
     width, height = frame_size
     blocks_x, blocks_y = block_grid
     block_width = max(1, width // blocks_x)
     block_height = max(1, height // blocks_y)
     active_blocks = 0
     total_blocks = 0
+    max_block_ratio = 0.0
     mean_shift = 0.0
 
     if normalize_luminance:
@@ -83,18 +85,21 @@ def block_motion_score(
         for block_x in range(blocks_x):
             x_start = block_x * block_width
             x_end = width if block_x == blocks_x - 1 else min(width, x_start + block_width)
-            delta_total = 0.0
+            changed_pixels = 0
             pixel_count = 0
 
             for y in range(y_start, y_end):
                 row_start = y * width
                 for x in range(x_start, x_end):
                     index = row_start + x
-                    delta_total += abs((frame[index] - background[index]) - mean_shift)
+                    delta = (frame[index] - background[index]) - mean_shift
+                    if abs(delta) >= pixel_delta:
+                        changed_pixels += 1
                     pixel_count += 1
 
-            mean_delta = delta_total / pixel_count if pixel_count else 0.0
-            if mean_delta >= block_delta:
+            block_ratio = changed_pixels / pixel_count if pixel_count else 0.0
+            max_block_ratio = max(max_block_ratio, block_ratio)
+            if block_ratio >= block_pixel_ratio:
                 active_blocks += 1
             total_blocks += 1
 
@@ -103,6 +108,7 @@ def block_motion_score(
         mean_shift,
         active_blocks,
         total_blocks,
+        max_block_ratio,
     )
 
 
@@ -377,9 +383,15 @@ def main() -> int:
     )
     parser.add_argument(
         "--block-delta",
-        default=6.0,
+        default=None,
         type=float,
-        help="Mean grayscale change needed for one block to count as moving.",
+        help="Deprecated. Use --pixel-delta and --block-pixel-ratio instead.",
+    )
+    parser.add_argument(
+        "--block-pixel-ratio",
+        default=0.02,
+        type=float,
+        help="Changed-pixel ratio needed for one block to count as moving.",
     )
     parser.add_argument(
         "--min-motion-blocks",
@@ -598,16 +610,21 @@ def main() -> int:
 
             luma_pct = mean_luma_pct(frame, sample_step)
             if args.score_mode == "block":
-                score, mean_shift, active_blocks, total_blocks = block_motion_score(
+                score, mean_shift, active_blocks, total_blocks, max_block_ratio = block_motion_score(
                     frame,
                     background,
                     args.monitor_size,
                     args.block_grid,
-                    args.block_delta,
+                    args.pixel_delta,
+                    args.block_pixel_ratio,
                     normalize_luminance=not args.no_luminance_normalize,
                 )
                 score_is_motion = score >= args.threshold and active_blocks >= args.min_motion_blocks
-                motion_units_text = f"active_blocks={active_blocks}/{total_blocks}"
+                motion_units_text = (
+                    f"active_blocks={active_blocks}/{total_blocks} "
+                    f"max_block_ratio={max_block_ratio:.3f} "
+                    f"pixel_delta={args.pixel_delta}"
+                )
             else:
                 score, mean_shift = motion_score(
                     frame,
